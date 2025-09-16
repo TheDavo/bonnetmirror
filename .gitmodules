@@ -1,0 +1,3 @@
+[submodule "src/lib/adafruit-oled-bonnet"]
+	path = src/lib/adafruit-oled-bonnet
+	url = https://github.com/TheDavo/adafruit-oled-bonnet.git
