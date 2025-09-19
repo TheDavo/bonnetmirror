@@ -17,15 +17,6 @@
 #define PORT "8080"
 #define BACKLOG 10
 
-/**
- * send_framebuffer_data sends the framebuffer held by the ssd1306 struct
- * in the bonnet `b` object to the client
- *
- * return the amount of bytes written to the client
- *
- */
-int send_framebuffer_data(int clientfd, struct bonnet b);
-
 int main(void) {
 
   struct ifaddrs *ifaddr, *ifa;
@@ -170,23 +161,65 @@ int main(void) {
     send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
     ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
   }
-  printf("sent the buffer\n");
 
+  sleep(1);
+
+  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
+  int width = b.ssd.framebuf->width;
+  int height = b.ssd.framebuf->height;
+  // ---------------------------------------------
+  printf("drawing lines from corners\n");
+  for (int i = 0; i < 64; i += 8) {
+    ssd1306_fb_draw_line_carte(b.ssd.framebuf, 0, 0, 127, i, true);
+  }
+  ssd1306_write_framebuffer_all(b.ssd);
+  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
+
+  for (int i = 0; i < 64; i += 2) {
+    ssd1306_fb_draw_line_carte(b.ssd.framebuf, 127, 63, 0, i, true);
+  }
+  ssd1306_write_framebuffer_all(b.ssd);
+  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
+  sleep(1);
+  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
+
+  // ---------------------------------------------
+  printf("drawing horizontal lines\n");
+  for (int i = 0; i < height; i += 2) {
+    ssd1306_fb_draw_line_carte(b.ssd.framebuf, 0, i, width, i, true);
+  }
+  ssd1306_write_framebuffer_all(b.ssd);
+  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
+  sleep(1);
+  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
+
+  // ---------------------------------------------
+  printf("drawing vertical lines\n");
+  for (int i = 0; i < b.ssd.framebuf->width; i += 8) {
+    ssd1306_fb_draw_line_carte(b.ssd.framebuf, i, height, i, 0, true);
+  }
+  ssd1306_write_framebuffer_all(b.ssd);
+  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
+  sleep(1);
+  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
+
+  // ---------------------------------------------
+  printf("drawing lines from bottom center outward\n");
+  int x0, y0;
+  x0 = 128 / 2;
+  y0 = 63;
+
+  // double rad;
+  for (double deg = 0; deg <= 180; deg += 10) {
+    ssd1306_fb_draw_line_polar(b.ssd.framebuf, x0, y0, 100, deg, true);
+  }
+  ssd1306_write_framebuffer_all(b.ssd);
+  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
+  sleep(1);
   bonnet_set_display_off(b);
   bonnet_close(&b);
 
   shutdown(sockfd, SHUT_RDWR);
 
   return 0;
-}
-
-int send_framebuffer_data(int clientfd, struct bonnet b) {
-  // get the framebuffer size to know how much information needs to be
-  // send to the client
-
-  int buf_len = b.ssd.framebuf->height * b.ssd.framebuf->width;
-  buf_len /= 8; // divide by the size of a byte, as height and width are the
-                // pixel count
-
-  return send(clientfd, b.ssd.framebuf->framebuf, buf_len, 0);
 }
