@@ -3,6 +3,7 @@
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -10,14 +11,52 @@
 #include <unistd.h>
 
 #include "./lib/adafruit-oled-bonnet/src/bonnet.h"
-#include "lib/adafruit-oled-bonnet/src/ssd1306.h"
-#include "lib/adafruit-oled-bonnet/src/ssd1306_gl.h"
-#include "lib/adafruit-oled-bonnet/src/uic/segment16.h"
+#include "./lib/adafruit-oled-bonnet/src/ssd1306.h"
+#include "./lib/adafruit-oled-bonnet/src/ssd1306_gl.h"
+#include "./lib/adafruit-oled-bonnet/src/uic/cursor.h"
+#include "./lib/adafruit-oled-bonnet/src/uic/segment16.h"
 
 #define PORT "8080"
 #define BACKLOG 10
 
+void *socket_connect_handler(void *data);
+
+enum prog_state {
+  PROG_STATE_START,
+  PROG_STATE_PROG_RUN,
+};
+
+enum conn_state {
+  CONN_STATE_CONNECTED,
+  CONN_STATE_DISCONNECTED,
+  CONN_STATE_NOT_CONNECTED,
+  CONN_STATE_ERR,
+};
+
+typedef struct game_master {
+  enum prog_state prog_state;
+  enum conn_state conn_state;
+  pthread_mutex_t conn_mutex;
+  int sockfd;
+  int clientfd;
+} game_master_t;
+
+void game_master_init(game_master_t *gm) {
+  gm->conn_state = CONN_STATE_NOT_CONNECTED;
+  gm->prog_state = PROG_STATE_START;
+  pthread_mutex_init(&gm->conn_mutex, NULL);
+  gm->sockfd = 0;
+}
+
+bool is_button_exit_condition(bonnet_e_button_state a,
+                              bonnet_e_button_state b) {
+  return a == bonnet_e_button_state_down && b == bonnet_e_button_state_down;
+}
+
 int main(void) {
+
+  game_master_t gm;
+  game_master_init(&gm);
 
   struct ifaddrs *ifaddr, *ifa;
 
@@ -56,12 +95,12 @@ int main(void) {
 
   ssd1306_fb_vec2_t intro_origin = {
       .x = 1,
-      .y = 24,
+      .y = 8,
   };
 
   ssd1306_fb_vec2_t ip_origin = {
       .x = 1,
-      .y = 34,
+      .y = 18,
   };
 
   char *intro_str = "Connect to:";
@@ -70,13 +109,92 @@ int main(void) {
   ssd1306_fb_draw_8x8font_str(b.ssd.framebuf, ip_origin, ip, strlen(ip), true,
                               true);
 
-  ssd1306_write_framebuffer_all(b.ssd);
-  sleep(1);
-  int sockfd;
-  int clientfd;
+  ssd1306_fb_vec2_t connect_a_loc = {
+      .x = 10,
+      .y = 44,
+  };
+  ssd1306_fb_vec2_t skip_connect_loc = {
+      .x = 24,
+      .y = 44,
+  };
 
+  ssd1306_fb_draw_circle(b.ssd.framebuf, 12, 48, 8, true, false);
+  ssd1306_fb_draw_8x8font_str(b.ssd.framebuf, connect_a_loc, "A", 1, true,
+                              true);
+  char *skip_conn = "Skip connect";
+  ssd1306_fb_draw_8x8font_str(b.ssd.framebuf, skip_connect_loc, skip_conn,
+                              strlen(skip_conn), true, true);
+  ssd1306_write_framebuffer_all(b.ssd);
+
+  pthread_t connect_thread;
+  pthread_create(&connect_thread, NULL, socket_connect_handler, (void *)&gm);
+
+  uic_cursor_attr_t cursor_attr = {.origin = {
+                                       .x = 10,
+                                       .y = 10,
+                                   }};
+
+  uic_t *cursor = uic_cursor_new(&cursor_attr);
+  bonnet_e_button_state states[7];
+  // pressing A and B quits the program
+  bonnet_button_get_states(b, states);
+  while (!is_button_exit_condition(states[BONNET_BUTTON_IDX_A],
+                                   states[BONNET_BUTTON_IDX_B])) {
+
+    bonnet_button_get_states(b, states);
+
+    if (gm.prog_state == PROG_STATE_START) {
+      if ((states[BONNET_BUTTON_IDX_A] == bonnet_e_button_state_down &&
+           gm.prog_state == PROG_STATE_START) ||
+          (gm.prog_state == PROG_STATE_START &&
+           gm.conn_state == CONN_STATE_CONNECTED)) {
+        gm.prog_state = PROG_STATE_PROG_RUN;
+      }
+    }
+
+    if (gm.prog_state == PROG_STATE_PROG_RUN) {
+      ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
+
+      if (states[BONNET_BUTTON_IDX_RIGHT] == bonnet_e_button_state_down) {
+        uic_cursor_position_update_relative(cursor, 10, 0);
+      }
+      if (states[BONNET_BUTTON_IDX_LEFT] == bonnet_e_button_state_down) {
+        uic_cursor_position_update_relative(cursor, -10, 0);
+      }
+      if (states[BONNET_BUTTON_IDX_UP] == bonnet_e_button_state_down) {
+        uic_cursor_position_update_relative(cursor, 0, -10);
+      }
+      if (states[BONNET_BUTTON_IDX_DOWN] == bonnet_e_button_state_down) {
+        uic_cursor_position_update_relative(cursor, 0, 10);
+      }
+
+      cursor->draw(b.ssd.framebuf, cursor->attr);
+      ssd1306_write_framebuffer_all(b.ssd);
+      if (gm.conn_state == CONN_STATE_CONNECTED) {
+        send(gm.clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
+      }
+    }
+    // for (int i = 0; i < 7; i++) {
+    //   printf("btn %d state %d\n", i, states[i]);
+    // }
+  }
+  printf("game loop left\n");
+  sleep(1);
+  bonnet_set_display_off(b);
+  bonnet_close(&b);
+  pthread_join(connect_thread, NULL);
+
+  shutdown(gm.sockfd, SHUT_RDWR);
+
+  return 0;
+}
+
+void *socket_connect_handler(void *_gm) {
+
+  game_master_t *gm = (game_master_t *)_gm;
   struct addrinfo hints;
   struct addrinfo *res;
+  int status;
 
   // from beej's guide to sockets
   // https://beej.us/guide/bgnet/html/split/system-calls-or-bust.html#system-calls-or-bust
@@ -91,40 +209,46 @@ int main(void) {
   hints.ai_flags = AI_PASSIVE;
 
   if (0 != (status = getaddrinfo(NULL, PORT, &hints, &res))) {
-    return (-1);
+    gm->conn_state = CONN_STATE_ERR;
+    return NULL;
   }
 
-  sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (-1 == sockfd) {
+  gm->sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (-1 == gm->sockfd) {
     freeaddrinfo(res);
     perror("opening socket");
-    return (-1);
+    gm->conn_state = CONN_STATE_ERR;
+    return NULL;
   }
-  printf("sockfd creation OK\n");
+  printf("gm->sockfd creation OK\n");
 
   // get rid of "Address already in use" error message
   //
   int yes = 1;
-  if (-1 == setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes)) {
+  if (-1 ==
+      setsockopt(gm->sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes)) {
     perror("setsockopt");
     freeaddrinfo(res);
-    close(sockfd);
-    return (-1);
+    close(gm->sockfd);
+    gm->conn_state = CONN_STATE_ERR;
+    return NULL;
   }
 
-  if (-1 == bind(sockfd, res->ai_addr, res->ai_addrlen)) {
+  if (-1 == bind(gm->sockfd, res->ai_addr, res->ai_addrlen)) {
     perror("binding socket");
     freeaddrinfo(res);
-    close(sockfd);
-    return (-1);
+    close(gm->sockfd);
+    gm->conn_state = CONN_STATE_ERR;
+    return NULL;
   }
   printf("bind OK\n");
 
-  if (-1 == listen(sockfd, BACKLOG)) {
+  if (-1 == listen(gm->sockfd, BACKLOG)) {
     perror("socket listen");
     freeaddrinfo(res);
-    close(sockfd);
-    return (-1);
+    close(gm->sockfd);
+    gm->conn_state = CONN_STATE_ERR;
+    return NULL;
   }
   printf("listen OK\n");
 
@@ -132,94 +256,15 @@ int main(void) {
   //
   struct sockaddr_storage inc_addr;
   socklen_t inc_addr_size = sizeof inc_addr;
-  clientfd = accept(sockfd, (struct sockaddr *)&inc_addr, &inc_addr_size);
-  if (-1 == clientfd) {
+  gm->clientfd =
+      accept(gm->sockfd, (struct sockaddr *)&inc_addr, &inc_addr_size);
+  if (-1 == gm->clientfd) {
     perror("client accept");
-    shutdown(sockfd, SHUT_RDWR);
+    shutdown(gm->sockfd, SHUT_RDWR);
     freeaddrinfo(res);
   }
+  gm->conn_state = CONN_STATE_CONNECTED;
   printf("client accept OK\n");
 
-  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-  uic_segment16_attr_t init = {
-      .color = true,
-      .dot = false,
-      .height = 32,
-      .origin =
-          {
-              .x = 10,
-              .y = 10,
-          },
-  };
-
-  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
-  for (int i = 0; i <= 10; i++) {
-    uic_t *seg = uic_segment16_new_from_int(i, &init, 4);
-    seg->draw(b.ssd.framebuf, seg->attr);
-    free(seg);
-    ssd1306_write_framebuffer_all(b.ssd);
-    send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-    ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
-  }
-
-  sleep(1);
-
-  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
-  int width = b.ssd.framebuf->width;
-  int height = b.ssd.framebuf->height;
-  // ---------------------------------------------
-  printf("drawing lines from corners\n");
-  for (int i = 0; i < 64; i += 8) {
-    ssd1306_fb_draw_line_carte(b.ssd.framebuf, 0, 0, 127, i, true);
-  }
-  ssd1306_write_framebuffer_all(b.ssd);
-  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-
-  for (int i = 0; i < 64; i += 2) {
-    ssd1306_fb_draw_line_carte(b.ssd.framebuf, 127, 63, 0, i, true);
-  }
-  ssd1306_write_framebuffer_all(b.ssd);
-  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-  sleep(1);
-  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
-
-  // ---------------------------------------------
-  printf("drawing horizontal lines\n");
-  for (int i = 0; i < height; i += 2) {
-    ssd1306_fb_draw_line_carte(b.ssd.framebuf, 0, i, width, i, true);
-  }
-  ssd1306_write_framebuffer_all(b.ssd);
-  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-  sleep(1);
-  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
-
-  // ---------------------------------------------
-  printf("drawing vertical lines\n");
-  for (int i = 0; i < b.ssd.framebuf->width; i += 8) {
-    ssd1306_fb_draw_line_carte(b.ssd.framebuf, i, height, i, 0, true);
-  }
-  ssd1306_write_framebuffer_all(b.ssd);
-  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-  sleep(1);
-  ssd1306_fb_clear_buffer(b.ssd.framebuf, false);
-
-  // ---------------------------------------------
-  printf("drawing lines from bottom center outward\n");
-  int x0, y0;
-  x0 = 128 / 2;
-  y0 = 63;
-
-  // double rad;
-  for (double deg = 0; deg <= 180; deg += 10) {
-    ssd1306_fb_draw_line_polar(b.ssd.framebuf, x0, y0, 100, deg, true);
-  }
-  ssd1306_write_framebuffer_all(b.ssd);
-  send(clientfd, b.ssd.framebuf->framebuf, sizeof(uint8_t) * 1024, 0);
-  sleep(1);
-  bonnet_set_display_off(b);
-  bonnet_close(&b);
-
-  shutdown(sockfd, SHUT_RDWR);
-
-  return 0;
+  return NULL;
 }

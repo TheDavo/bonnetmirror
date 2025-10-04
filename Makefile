@@ -16,9 +16,10 @@ bonnetmirror_src=./src/main.c
 
 bonnetmirror: $(bonnetmirror_src) $(adafruit_bonnet_font_src) $(adafruit_bonnet_src)
 	mkdir -p ./bin/
-	$(CC) -o ./bin/bonnetmirror -I$(adafruit_bonnet_srcdir) \
+	$(CC) -o ./bin/bonnetmirror \
 	$(bonnetmirror_src) $(adafruit_bonnet_src) $(adafruit_bonnet_uic_src) \
 	$(adafruit_bonnet_font_src) $(errors) $(libs) -g
 
+# $(CC) -o ./bin/bonnetmirror -I$(adafruit_bonnet_srcdir) \
 clean:
 	rm -f ./bin/*
