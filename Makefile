@@ -1,8 +1,8 @@
-CC=gcc
-errors=-Wall -Werror
-libs=-lgpiod -lm
+CC ?= gcc
+CFLAGS ?= -Wall -Werror
+LDLIBS ?=-lgpiod -lm
+LDFLAGS ?= 
 src_dir=src
-tests_gl_dir=tests_gl
 srcs=$(wildcard ./src/*.c)
 
 adafruit_bonnet_srcdir=./src/lib/adafruit-oled-bonnet
@@ -12,14 +12,16 @@ adafruit_bonnet_fonts_src=$(wildcard ./src/lib/adafruit-oled-bonnet/fonts/*.h)
 
 bonnetmirror_src=./src/main.c
 
-.PHONY = clean
+.PHONY = all clean
 
-bonnetmirror: $(bonnetmirror_src) $(adafruit_bonnet_font_src) $(adafruit_bonnet_src)
+all: bonnetmirror
+
+bonnetmirror: $(bonnetmirror_src) $(adafruit_bonnet_font_src) \
+			  $(adafruit_bonnet_src) $(adafruit_bonnet_uic_src)
 	mkdir -p ./bin/
-	$(CC) -o ./bin/bonnetmirror \
+	$(CC) $(CFLAGS) $(LDFLAGS) -o ./bin/bonnetmirror \
 	$(bonnetmirror_src) $(adafruit_bonnet_src) $(adafruit_bonnet_uic_src) \
-	$(adafruit_bonnet_font_src) $(errors) $(libs) -g
+	$(adafruit_bonnet_font_src) $(LDLIBS) -g
 
-# $(CC) -o ./bin/bonnetmirror -I$(adafruit_bonnet_srcdir) \
 clean:
 	rm -f ./bin/*
